@@ -1,0 +1,85 @@
+name: Web build
+
+# Builds the Emscripten (WebAssembly) version.
+# - push / pull request: build check, the package is kept as a workflow artifact.
+# - tag web-vX.Y.Z: the package pinball-web-X.Y.Z.tgz (SpaceCadetPinball.js + .wasm, no game
+#   data) is attached to the GitHub release of that tag (created if missing).
+on:
+  push:
+    branches: [bliss-web]
+    tags: ['web-v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: emscripten/emsdk:6.0.10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ninja-build cmake
+
+      - name: Build
+        run: |
+          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-web
+
+      - name: Package
+        id: pkg
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/web-v* ]]; then
+            VERSION="${GITHUB_REF_NAME#web-v}"
+          else
+            VERSION="0.0.0-${GITHUB_SHA::7}"
+          fi
+          NAME="pinball-web-${VERSION}"
+          mkdir -p "dist/${NAME}"
+          cp build-web/bin/SpaceCadetPinball.js build-web/bin/SpaceCadetPinball.wasm LICENSE "dist/${NAME}/"
+          cp Platform/Web/RELEASE-README.md "dist/${NAME}/README.md"
+          # Files at the archive root.
+          tar -C "dist/${NAME}" -czf "dist/${NAME}.tgz" .
+          (cd dist && sha256sum "${NAME}.tgz" > "${NAME}.tgz.sha256")
+          ls -l "dist/${NAME}" dist
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: |
+            dist/${{ steps.pkg.outputs.name }}.tgz
+            dist/${{ steps.pkg.outputs.name }}.tgz.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/web-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#web-v}"
+          ls -l dist
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "Web build $VERSION" \
+              --notes "SpaceCadetPinball web build (Emscripten 6.0.10). Contains SpaceCadetPinball.js (ES module, factory createPinball) and SpaceCadetPinball.wasm. No game data. Host contract: Doc/web.md."
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/*.tgz dist/*.sha256 --repo "$GITHUB_REPOSITORY" --clobber
