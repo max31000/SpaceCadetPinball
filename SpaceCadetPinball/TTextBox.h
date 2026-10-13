@@ -34,5 +34,6 @@ private:
 	static void TimerExpired(int timerId, void* caller);
 
 	void Draw();
+	bool UseBitmapFont(const char* text) const;
 	LayoutResult LayoutTextLine(char* textStart) const;
 };

@@ -253,6 +253,8 @@ enum class Lang : int
 	Turkish,
 	SimplifiedChinese,
 	TraditionalChinese,
+	// Original Russian Windows XP texts, generated from pinball.exe (translations_ru_xp.inc)
+	RussianXP,
 	Max
 };
 
@@ -322,6 +324,7 @@ public:
 
 	static const char* GetTranslation(Msg id);
 	static void SetCurrentLanguage(const char* short_name);
+	static bool IsKnownLanguage(const char* short_name);
 	static const LanguageInfo* GetCurrentLanguage();
 	static void GetGlyphRange(ImVector<ImWchar>* ranges);
 

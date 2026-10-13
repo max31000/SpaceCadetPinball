@@ -146,7 +146,7 @@ void TTextBox::Display(const char* text, float time, bool lowPriority)
 void TTextBox::DrawImGui()
 {
 	// Do nothing when using a font (the text will be rendered to VScreen in TTextBox::Draw)
-	if (Font || !CurrentMessage)
+	if (!CurrentMessage || UseBitmapFont(CurrentMessage->Text))
 		return;
 
 	char windowName[64];
@@ -224,7 +224,7 @@ void TTextBox::Draw()
 
 	if (display)
 	{
-		if (!Font)
+		if (!UseBitmapFont(CurrentMessage->Text))
 		{
 			// Immediate mode drawing using system font is handled by TTextBox::DrawImGui
 			return;
@@ -271,6 +271,21 @@ void TTextBox::Draw()
 			offY += Font->Height;
 		}
 	}
+}
+
+bool TTextBox::UseBitmapFont(const char* text) const
+{
+	if (!Font)
+		return false;
+	// The bitmap font has ASCII glyphs only (the original masked bytes with 0x7F, so localized
+	// texts such as the Russian XP "Game over" came out garbled). Draw non-ASCII messages with
+	// the system font instead.
+	for (auto p = text; *p; ++p)
+	{
+		if (static_cast<unsigned char>(*p) >= 0x80)
+			return false;
+	}
+	return true;
 }
 
 TTextBox::LayoutResult TTextBox::LayoutTextLine(char* textStart) const

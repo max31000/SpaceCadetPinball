@@ -156,9 +156,10 @@ optionsStruct options::Options
 	{"Debug Overlay Ball Depth Grid", true},
 	{"Debug Overlay AABB", true},
 #ifdef __EMSCRIPTEN__
-	// Web build: Russian XP data, Tahoma (Cyrillic) shipped in the preloaded data dir.
+	// Web build: original Russian XP texts (P3, tools/gen_ru_xp.py); Tahoma (Cyrillic) is
+	// provided by the host in the data dir.
 	{"FontFileName", "tahoma.ttf"},
-	{"Language", "ru"},
+	{"Language", "ru_xp"},
 #else
 	{"FontFileName", ""},
 	{"Language", translations::GetCurrentLanguage()->ShortName},
