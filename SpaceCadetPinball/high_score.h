@@ -25,6 +25,11 @@ public:
 	static void show_high_score_dialog();
 	static void show_and_set_high_score_dialog(high_score_entry score);
 	static void RenderHighScoreDialog();
+
+	// Web build: the name entry is a host DOM dialog ("highScoreEntry" event).
+	static int SubmitPendingName(const char* name);
+	static bool CancelPendingEntry();
+	static void ClearAndSave();
 private:
 	static bool dlg_enter_name;
 	static high_score_entry DlgData;
@@ -33,4 +38,5 @@ private:
 
 	static void clear_table();
 	static void place_new_score_into(high_score_entry data);
+	static void ProcessQueueWeb();
 };

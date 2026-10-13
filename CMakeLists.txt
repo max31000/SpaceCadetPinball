@@ -38,10 +38,13 @@ if(EMSCRIPTEN)
     set(EMSCRIPTEN_PORT_FLAGS "-sUSE_SDL=2 -sUSE_SDL_MIXER=2 -sSDL2_MIXER_FORMATS=ogg")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EMSCRIPTEN_PORT_FLAGS}")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EMSCRIPTEN_PORT_FLAGS}")
-    # Directory with game data (PINBALL.DAT, SOUND*.WAV, optional PINBALL.OGG, tahoma.ttf),
-    # preloaded into the root of MEMFS. Kept outside of the repository.
-    set(PINBALL_WEB_DATA_DIR "" CACHE PATH "Game data directory to --preload-file into the web build")
-    set(CMAKE_EXECUTABLE_SUFFIX ".html")
+    # Release builds carry no game data: the host page writes the files into /data in preRun
+    # (see Doc/web.md). For local development only, a data directory (PINBALL.DAT, SOUND*.WAV,
+    # optional PINBALL.OGG, tahoma.ttf) can be packaged with --preload-file into /data.
+    set(PINBALL_WEB_PRELOAD_DIR "" CACHE PATH "Dev only: game data directory to --preload-file into /data")
+    set(CMAKE_EXECUTABLE_SUFFIX ".js")
+    # Keep release and dev (preload) builds apart: <build dir>/bin/SpaceCadetPinball.{js,wasm[,data]}
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 else()
     find_package(SDL2 REQUIRED)
     FIND_PACKAGE(SDL2_mixer REQUIRED)
@@ -177,6 +180,8 @@ set(SOURCE_FILES
         SpaceCadetPinball/TWall.h
         SpaceCadetPinball/winmain.cpp
         SpaceCadetPinball/web_api.cpp
+        SpaceCadetPinball/web_api.h
+        SpaceCadetPinball/translations_ru_xp.inc
         SpaceCadetPinball/winmain.h
         SpaceCadetPinball/zdrv.cpp
         SpaceCadetPinball/zdrv.h
@@ -231,20 +236,21 @@ endif()
 
 if(EMSCRIPTEN)
     set(WEB_DIR "${CMAKE_CURRENT_LIST_DIR}/Platform/Web")
-    set(WEB_EXPORTS "_main,_bliss_new_game,_bliss_toggle_pause,_bliss_is_paused,_bliss_pause,_bliss_toggle_sound,_bliss_toggle_music,_bliss_get_options,_bliss_set_option,_bliss_get_high_scores,_bliss_persist")
+    set(WEB_EXPORTS "_main,_bliss_new_game,_bliss_launch_ball,_bliss_demo_toggle,_bliss_toggle_pause,_bliss_is_paused,_bliss_pause,_bliss_toggle_sound,_bliss_toggle_music,_bliss_get_options,_bliss_set_option,_bliss_get_high_scores,_bliss_submit_high_score_name,_bliss_cancel_high_score,_bliss_clear_high_scores,_bliss_set_language,_bliss_set_ups,_bliss_reload_music,_bliss_persist")
+    # ES6 module factory: import createPinball from './SpaceCadetPinball.js' (Doc/web.md).
     set(WEB_LINK_FLAGS
         "${EMSCRIPTEN_PORT_FLAGS} -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web -lidbfs.js"
+        "-sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createPinball"
         "-sEXPORTED_FUNCTIONS=${WEB_EXPORTS}"
-        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,FS"
-        "--pre-js ${WEB_DIR}/pre.js --shell-file ${WEB_DIR}/shell.html")
-    if(PINBALL_WEB_DATA_DIR)
-        list(APPEND WEB_LINK_FLAGS "--preload-file ${PINBALL_WEB_DATA_DIR}@/")
-    else()
-        message(WARNING "PINBALL_WEB_DATA_DIR is not set: the build will have no game data")
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,FS,addRunDependency,removeRunDependency"
+        "--pre-js ${WEB_DIR}/pre.js --js-library ${WEB_DIR}/library_bliss.js")
+    if(PINBALL_WEB_PRELOAD_DIR)
+        message(STATUS "Dev build: preloading ${PINBALL_WEB_PRELOAD_DIR} into /data")
+        list(APPEND WEB_LINK_FLAGS "--preload-file ${PINBALL_WEB_PRELOAD_DIR}@/data")
     endif()
     string(REPLACE ";" " " WEB_LINK_FLAGS "${WEB_LINK_FLAGS}")
     set_target_properties(SpaceCadetPinball PROPERTIES LINK_FLAGS "${WEB_LINK_FLAGS}")
-    set_property(TARGET SpaceCadetPinball APPEND PROPERTY LINK_DEPENDS "${WEB_DIR}/pre.js;${WEB_DIR}/shell.html")
+    set_property(TARGET SpaceCadetPinball APPEND PROPERTY LINK_DEPENDS "${WEB_DIR}/pre.js;${WEB_DIR}/library_bliss.js")
 else()
     target_link_libraries(SpaceCadetPinball ${SDL2_LIBRARY} ${SDL2_MIXER_LIBRARY})
 endif()

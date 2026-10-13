@@ -300,3 +300,7 @@ _deps
 build.ninja
 # Build directory
 /build
+
+# Web build outputs
+build-web*/
+dist-web/

@@ -101,6 +101,7 @@ public:
 	static void SetVolume(int volume);
 	static bool play_track(MidiTracks track, bool replay);
 	static MidiTracks get_active_track();
+	static bool ReloadMusic();
 private:
 	static std::vector<Mix_Music*> LoadedTracks;
 	static Mix_Music* track1, * track2, * track3;

@@ -5,6 +5,7 @@
 #include "control.h"
 #include "fullscrn.h"
 #include "high_score.h"
+#include "web_api.h"
 #include "proj.h"
 #include "render.h"
 #include "loader.h"
@@ -717,6 +718,14 @@ void pb::end_game()
 				high_score::show_and_set_high_score_dialog({entry, -1});
 			}
 		}
+	}
+
+	{
+		// Host page notification (web build); scores in player order.
+		int playerScores[4]{};
+		for (auto index = 0; index < playerCount; ++index)
+			playerScores[index] = MainTable->PlayerScores[index].ScoreStruct->Score;
+		web_api::GameOver(playerScores, playerCount, demo_mode, MainTable->CheatsUsed);
 	}
 }
 

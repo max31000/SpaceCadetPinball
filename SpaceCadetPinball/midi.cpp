@@ -211,6 +211,21 @@ bool midi::play_track(MidiTracks track, bool replay)
 	return true;
 }
 
+// Web build: the host may write PINBALL.OGG after start (lazy loading). Loads the track if it
+// was missing and starts it when music is on. Returns true if the track is available.
+bool midi::ReloadMusic()
+{
+	if (pb::FullTiltMode)
+		return track1 != nullptr;
+	if (!track1)
+		track1 = load_track("PINBALL");
+	if (!track1)
+		return false;
+	if (IsPlaying && active_track == MidiTracks::None)
+		play_track(MidiTracks::Track1, true);
+	return true;
+}
+
 MidiTracks midi::get_active_track()
 {
 	if (!IsPlaying)

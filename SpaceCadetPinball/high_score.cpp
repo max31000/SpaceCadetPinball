@@ -5,6 +5,7 @@
 #include "pb.h"
 #include "score.h"
 #include "translations.h"
+#include "web_api.h"
 
 bool high_score::dlg_enter_name;
 bool high_score::ShowDialog = false;
@@ -119,6 +120,10 @@ void high_score::show_and_set_high_score_dialog(high_score_entry score)
 
 void high_score::RenderHighScoreDialog()
 {
+#ifdef __EMSCRIPTEN__
+	ProcessQueueWeb();
+	return;
+#endif
 	if (ShowDialog == true)
 	{
 		ShowDialog = false;
@@ -235,4 +240,86 @@ void high_score::RenderHighScoreDialog()
 			ShowDialog = true;
 		}
 	}
+}
+
+// Web build: instead of the ImGui modal, hand the next queued score to the host page and wait
+// for bliss_submit_high_score_name / bliss_cancel_high_score. The plain "High Scores" view
+// (show_high_score_dialog) is a host dialog fed by bliss_get_high_scores.
+void high_score::ProcessQueueWeb()
+{
+	if (!ShowDialog)
+		return;
+	ShowDialog = false;
+	if (dlg_enter_name)
+		return; // still waiting for the host
+
+	while (!ScoreQueue.empty())
+	{
+		DlgData = ScoreQueue.back();
+		ScoreQueue.pop_back();
+		if (DlgData.Position < 0 || DlgData.Position > 4)
+			DlgData.Position = get_score_position(DlgData.Entry.Score);
+		if (DlgData.Position != -1)
+		{
+			dlg_enter_name = true;
+			break;
+		}
+	}
+
+	if (dlg_enter_name)
+	{
+		DlgData.Entry.Name[sizeof DlgData.Entry.Name - 1] = 0;
+		web_api::HighScoreEntry(DlgData.Entry.Score, DlgData.Position, DlgData.Entry.Name,
+		                        static_cast<int>(ScoreQueue.size()));
+	}
+}
+
+int high_score::SubmitPendingName(const char* name)
+{
+	if (!dlg_enter_name)
+		return 0;
+
+	// Empty name: keep the pre-filled default name ("Player N"), like confirming the original
+	// dialog without typing.
+	if (!name[0])
+		name = DlgData.Entry.Name;
+	std::string nameCopy = name;
+	name = nameCopy.c_str();
+
+	// Truncate to the 31-byte field without splitting a UTF-8 sequence.
+	auto length = strlen(name);
+	const auto maxLength = sizeof DlgData.Entry.Name - 1;
+	if (length > maxLength)
+	{
+		length = maxLength;
+		while (length > 0 && (static_cast<unsigned char>(name[length]) & 0xC0) == 0x80)
+			length--;
+	}
+	memset(DlgData.Entry.Name, 0, sizeof DlgData.Entry.Name);
+	memcpy(DlgData.Entry.Name, name, length);
+
+	auto position = get_score_position(DlgData.Entry.Score);
+	dlg_enter_name = false;
+	ShowDialog = !ScoreQueue.empty();
+	if (position < 0)
+		return 0;
+	DlgData.Position = position;
+	place_new_score_into(DlgData);
+	write();
+	return position + 1;
+}
+
+bool high_score::CancelPendingEntry()
+{
+	if (!dlg_enter_name)
+		return false;
+	dlg_enter_name = false;
+	ShowDialog = !ScoreQueue.empty();
+	return true;
+}
+
+void high_score::ClearAndSave()
+{
+	clear_table();
+	write();
 }

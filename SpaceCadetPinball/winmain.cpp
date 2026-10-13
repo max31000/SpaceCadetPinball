@@ -11,6 +11,7 @@
 #include "Sound.h"
 #include "translations.h"
 #include "font_selection.h"
+#include "web_api.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -84,6 +85,11 @@ int winmain::WinMain(LPCSTR lpCmdLine)
 
 	// SDL init
 	SDL_SetMainReady();
+#ifdef __EMSCRIPTEN__
+	// Keyboard events only while the game canvas has focus, so host page dialogs (high score
+	// name entry, controls) receive keys normally. pre.js makes the canvas focusable.
+	SDL_SetHint(SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT, "#canvas");
+#endif
 	if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_AUDIO | SDL_INIT_VIDEO |
 		SDL_INIT_EVENTS | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0)
 	{
@@ -99,7 +105,10 @@ int winmain::WinMain(LPCSTR lpCmdLine)
 		pb::get_rc_string(Msg::STRING139),
 		SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
 		800, 556,
-		SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE
+		// Web: the host page owns the canvas layout. A resizable SDL window would follow the
+		// browser window size; instead the canvas keeps the table size and the host scales it
+		// with CSS.
+		SDL_WINDOW_HIDDEN | (WebBuild ? 0 : SDL_WINDOW_RESIZABLE)
 	);
 	MainWindow = window;
 	if (!window)
@@ -234,6 +243,8 @@ int winmain::InitGameInstance()
 	// The host page provides the menu; the ImGui menu bar stays hidden.
 	Options.ShowMenu = false;
 	Options.FullScreen = false;
+	// Original XP look: the 640x480 mode (600x416 table), scaled by the host with CSS.
+	Options.Resolution = 0;
 #endif
 
 	if (!Options.FontFileName.V.empty())
@@ -269,6 +280,11 @@ int winmain::InitGameInstance()
 	ImGui::StyleColorsDark();
 
 	ImGui_ImplSDL2_InitForSDLRenderer(window, Renderer);
+#ifdef __EMSCRIPTEN__
+	// No ImGui text fields on the web: with text input enabled SDL would not preventDefault /
+	// would consume keypress events meant for host DOM inputs.
+	SDL_StopTextInput();
+#endif
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
 
 	// Data search order: WD, executable path, user pref path, platform specific paths.
@@ -290,7 +306,9 @@ int winmain::InitGameInstance()
 	if (!MixOpened)
 		Options.Sounds = false;
 
-	if (!midi::music_init(MixOpened, Options.MusicVolume))
+	// Web: keep the user's music choice even when PINBALL.OGG is not there (yet): the host may
+	// write it later and call bliss_reload_music().
+	if (!midi::music_init(MixOpened, Options.MusicVolume) && !WebBuild)
 		Options.Music = false;
 
 	if (pb::init())
@@ -624,12 +642,15 @@ void winmain::WebFrame(void*)
 		UpdateMouseNudge();
 		if (!single_step && !no_time_loss)
 		{
+			// UPS is set to the display refresh rate (P4, pre.js), so the target is exactly one
+			// step per frame. Rounding (instead of flooring) the accumulator absorbs rAF jitter
+			// without 0/2-step frames; the remainder stays within +-half a step, so long-term
+			// game speed still follows real time.
 			UpdateAccumulator += elapsed;
-			while (UpdateAccumulator >= TargetFrameTime)
-			{
+			auto steps = static_cast<int>(std::floor(UpdateAccumulator / TargetFrameTime + 0.5));
+			for (auto step = 0; step < steps; step++)
 				UpdateGame(TargetFrameTime);
-				UpdateAccumulator -= TargetFrameTime;
-			}
+			UpdateAccumulator -= steps * TargetFrameTime;
 		}
 		else
 		{
@@ -648,6 +669,8 @@ void winmain::WebFrame(void*)
 		PersistCounter = 0;
 		PersistSettings();
 	}
+
+	web_api::Frame();
 }
 #endif
 
@@ -988,8 +1011,14 @@ void winmain::RenderUi()
 		ImGui::EndMainMenuBar();
 	}
 
-	a_dialog();
+	// Web: every dialog is a host DOM dialog; high scores are forwarded as events.
 	high_score::RenderHighScoreDialog();
+	if (WebBuild)
+	{
+		gdrv::grtext_draw_ttext_in_box();
+		return;
+	}
+	a_dialog();
 	font_selection::RenderDialog();
 	if (ShowSpriteViewer)
 		render::SpriteViewer(&ShowSpriteViewer);
@@ -1523,6 +1552,8 @@ void winmain::HandleGameBinding(GameBindings binding, bool shortcut)
 		options::toggle(Menu1::Music);
 		break;
 	case GameBindings::ShowControlDialog:
+		if (WebBuild)
+			break;
 		pause(false);
 		options::ShowControlDialog();
 		break;
