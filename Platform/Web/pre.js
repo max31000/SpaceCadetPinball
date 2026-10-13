@@ -10,7 +10,7 @@
 // - Canvas: made focusable (keyboard input is bound to it), no context menu (right flipper is
 //   the right mouse button). Its size is the table size; the host scales it with CSS.
 // - P4 frame pacing: the display refresh rate is measured from requestAnimationFrame intervals
-//   (median of the first 60) and snapped to {60,72,75,90,100,120,144,165,240}; once the game
+//   (median of 60; repeated on tab visible / monitor change / every 60 s) and snapped to {60,72,75,90,100,120,144,165,240}; once the game
 //   has started, UPS is set to it (one simulation step per frame). Fallback 120.
 //   `Module.blissUps = N` pins UPS instead; the host can call _bliss_set_ups() at any time.
 // - Resumes the SDL2 AudioContext on the first user gesture (autoplay policy).
@@ -68,23 +68,44 @@
     if (!started) return;
     var pinned = Module['blissUps'];
     var ups = pinned > 0 ? pinned : measuredUps;
-    if (ups > 0 && Module['_bliss_set_ups']) Module['blissUpsApplied'] = Module['_bliss_set_ups'](ups);
+    if (ups > 0 && Module['_bliss_set_ups']) {
+      Module['blissUpsApplied'] = Module['_bliss_set_ups'](ups);
+      lastApplied = ups;
+    }
   }
-  if (typeof requestAnimationFrame === 'function' && !(Module['blissUps'] > 0)) {
+  // Re-measured when the tab becomes visible again, when the device pixel ratio changes
+  // (window moved to another monitor) and every 60 s; UPS is only re-applied if it changed.
+  var measuring = false, lastApplied = 0;
+  function measure() {
+    if (measuring || typeof requestAnimationFrame !== 'function' || Module['blissUps'] > 0) return;
+    measuring = true;
     var stamps = [];
     var tick = function (t) {
       if (typeof document !== 'undefined' && document.hidden) stamps = [];
       else stamps.push(t);
       if (stamps.length <= 60) { requestAnimationFrame(tick); return; }
+      measuring = false;
       var d = [];
       for (var i = 1; i < stamps.length; i++) d.push(stamps[i] - stamps[i - 1]);
       d.sort(function (a, b) { return a - b; });
       var median = d[d.length >> 1];
       Module['blissRefreshHz'] = median > 0 ? 1000 / median : 0;
       measuredUps = Module['blissSnapRefreshRate'](Module['blissRefreshHz']);
-      applyUps();
+      if (measuredUps !== lastApplied) applyUps();
     };
     requestAnimationFrame(tick);
+  }
+  measure();
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) measure(); });
+    setInterval(function () { if (!document.hidden) measure(); }, 60000);
+    var watchDpr = function () {
+      if (typeof matchMedia !== 'function') return;
+      var mq = matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)');
+      var onChange = function () { mq.removeEventListener('change', onChange); measure(); watchDpr(); };
+      mq.addEventListener('change', onChange);
+    };
+    watchDpr();
   }
 
   // Called by the game (web_api::Emit) before the host's onBlissEvent.

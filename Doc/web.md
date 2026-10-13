@@ -99,7 +99,9 @@ right away.
 | `bliss_get_options` | `char*()` | JSON, shape of the `optionsChanged` event plus `paused` |
 | `bliss_set_option` | `int(char* name, int value)` | See below; returns 0 for an unknown name |
 | `bliss_get_high_scores` | `char*()` | JSON `[{name, score}] ×5` (empty slot: `score: -999`) |
-| `bliss_submit_high_score_name` | `int(char* utf8)` | Answer to `highScoreEntry`; name truncated to 31 bytes; `""` stores the default name from the event (what the original dialog pre-fills, e.g. "Player 1") — use this for a cancelled DOM dialog; returns the 1-based rank, 0 if nothing was pending |
+| `bliss_submit_high_score_name` | `int(char* utf8)` | Answer to `highScoreEntry`; control characters (incl. CR/LF) become spaces, then truncated to 31 bytes on a UTF-8 boundary; `""` stores the default name from the event (what the original dialog pre-fills, e.g. "Player 1") — use this for a cancelled DOM dialog; returns the 1-based rank, 0 if nothing was pending |
+| `bliss_get_pending_high_score` | `char*()` | Pending name entry as JSON (payload of `highScoreEntry`) or `null` — for a remounted host page |
+| `bliss_reemit_pending_high_score` | `int()` | Emit `highScoreEntry` again for the pending entry; 1 if one is pending |
 | `bliss_cancel_high_score` | `int()` | Original "Отмена" semantics: dismiss the pending entry without storing the score |
 | `bliss_clear_high_scores` | `void()` | "Очистить" of the original dialog |
 | `bliss_set_language` | `int(char* code)` | `ru_xp` (default), `ru`, `en`, …; restarts the game instance (current game is lost); 0 for an unknown code |
@@ -130,13 +132,16 @@ Exceptions thrown by the handler are caught and logged.
 ## Frame pacing (decision P4)
 
 The browser drives the loop: `emscripten_set_main_loop_arg(WebFrame, nullptr, 0 /*rAF*/, 1)`.
-UPS is set to the **display refresh rate**: `pre.js` takes the median of the first 60
-`requestAnimationFrame` intervals (restarting while the tab is hidden), snaps it to the nearest
+UPS is set to the **display refresh rate**: `pre.js` takes the median of 60
+`requestAnimationFrame` intervals (restarting while the tab is hidden; repeated when the tab
+becomes visible, when the device pixel ratio changes, e.g. the window moved to another
+monitor, and every 60 s — UPS is re-applied only when the snapped value changes), snaps it to the nearest
 of {60, 72, 75, 90, 100, 120, 144, 165, 240} (implausible values → fallback 120) and calls
-`bliss_set_ups` once the game has started. Each frame advances the game by
-`round(accumulator / step)` fixed steps of `1000/UPS` ms and renders once: with UPS = refresh
-rate this is one step per frame without interpolation, rAF jitter does not produce 0/2-step
-frames, and a long frame (or a refresh rate that changed later) still keeps real-time speed.
+`bliss_set_ups` once the game has started. Each frame renders once and advances the game in fixed steps of `1000/UPS` ms with
+hysteresis: a frame 0.5–1.5 steps long runs exactly one step while the accumulated drift stays
+within (−1, 2) steps, so with UPS = refresh rate there is one step per frame without
+interpolation and rAF jitter never produces 0/2-step frames; otherwise the accumulator is
+rounded (long frames, refresh ≠ UPS), which keeps real-time game speed.
 Catch-up is limited to 100 ms. The host can override with `blissUps` or `bliss_set_ups()`.
 Before the measurement completes the game runs at the default 120 UPS.
 
@@ -148,9 +153,9 @@ Default language is `ru_xp`: the strings of the **original Russian Windows XP `p
 short UI strings only). As in the Russian XP release, in-game messages stay English
 (e.g. "Game Paused / F3 to Resume") and only a few texts are Russian (window title, "Игра
 окончена", dialogs, menus). Ids missing from the exe fall back to English. The community
-translation stays available as `ru`.
+translation stays available as `ru`. (`ru_xp` also appears in the native Language menu.)
 
-Deviation from the original: XP draws the info box with a bitmap font that only has ASCII
+Deviation from the original (web build only; native keeps upstream behaviour): XP draws the info box with a bitmap font that only has ASCII
 glyphs (bytes are masked with 0x7F, so the Russian "Игра окончена" came out garbled). The
 port draws messages containing non-ASCII characters with the TTF font instead
 (`TTextBox::UseBitmapFont`); ASCII messages keep the original bitmap font.
@@ -160,7 +165,10 @@ port draws messages containing non-ASCII characters with the TTF font instead
 IDBFS is mounted at `/libsdl` (SDL pref path `/libsdl/SpaceCadetPinball/`) and loaded before
 `main()`. Options, controls and high scores live in the ImGui `.ini` there. The game checks
 about once per second (and after every export that changes options / high scores) whether the
-`.ini` content changed, writes it and calls `Module.blissSyncfs()`.
+`.ini` content changed, writes it and calls `Module.blissSyncfs()`. The flush on `pagehide`
+is best-effort: `FS.syncfs` is asynchronous and the browser may tear the page down before
+IndexedDB commits, so changes from the last second before closing can be lost (high score
+submits and option exports flush immediately).
 
 ## Other differences from the desktop build
 

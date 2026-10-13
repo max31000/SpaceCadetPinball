@@ -277,7 +277,10 @@ bool TTextBox::UseBitmapFont(const char* text) const
 {
 	if (!Font)
 		return false;
-	// The bitmap font has ASCII glyphs only (the original masked bytes with 0x7F, so localized
+#ifndef __EMSCRIPTEN__
+	return true; // native: upstream behaviour
+#endif
+	// Web: the bitmap font has ASCII glyphs only (the original masked bytes with 0x7F, so localized
 	// texts such as the Russian XP "Game over" came out garbled). Draw non-ASCII messages with
 	// the system font instead.
 	for (auto p = text; *p; ++p)

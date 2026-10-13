@@ -643,14 +643,21 @@ void winmain::WebFrame(void*)
 		if (!single_step && !no_time_loss)
 		{
 			// UPS is set to the display refresh rate (P4, pre.js), so the target is exactly one
-			// step per frame. Rounding (instead of flooring) the accumulator absorbs rAF jitter
-			// without 0/2-step frames; the remainder stays within +-half a step, so long-term
-			// game speed still follows real time.
+			// step per frame. Hysteresis: a "normal" frame (0.5..1.5 steps long) runs exactly one
+			// step as long as the accumulated drift stays within (-1, 2) steps, so rAF jitter never
+			// produces 0/2-step frames. Otherwise (long frames, refresh != UPS) the accumulator is
+			// rounded, which drops/adds a step now and then and keeps real-time game speed.
 			UpdateAccumulator += elapsed;
-			auto steps = static_cast<int>(std::floor(UpdateAccumulator / TargetFrameTime + 0.5));
+			int steps;
+			if (elapsed > TargetFrameTime * 0.5 && elapsed < TargetFrameTime * 1.5 &&
+				UpdateAccumulator > -TargetFrameTime && UpdateAccumulator < TargetFrameTime * 2)
+				steps = 1;
+			else
+				steps = std::max(0, static_cast<int>(std::floor(UpdateAccumulator / TargetFrameTime + 0.5)));
 			for (auto step = 0; step < steps; step++)
 				UpdateGame(TargetFrameTime);
 			UpdateAccumulator -= steps * TargetFrameTime;
+			UpdateAccumulator = Clamp(UpdateAccumulator, -TargetFrameTime, TargetFrameTime * 2);
 		}
 		else
 		{
@@ -1012,13 +1019,14 @@ void winmain::RenderUi()
 	}
 
 	// Web: every dialog is a host DOM dialog; high scores are forwarded as events.
-	high_score::RenderHighScoreDialog();
 	if (WebBuild)
 	{
+		high_score::RenderHighScoreDialog();
 		gdrv::grtext_draw_ttext_in_box();
 		return;
 	}
 	a_dialog();
+	high_score::RenderHighScoreDialog();
 	font_selection::RenderDialog();
 	if (ShowSpriteViewer)
 		render::SpriteViewer(&ShowSpriteViewer);

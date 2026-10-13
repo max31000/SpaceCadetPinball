@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 // Host page integration of the Emscripten build (see Doc/web.md). All functions are no-ops in
 // desktop builds so call sites need no #ifdefs.
@@ -15,6 +16,7 @@ public:
 	// pb::end_game hook: scores in player order.
 	static void GameOver(const int* scores, int playerCount, bool demo, bool cheats);
 	static void HighScoreEntry(int score, int position, const char* defaultName, int pending);
+	static std::string HighScoreEntryJson(int score, int position, const char* defaultName, int pending);
 	static bool Started;
 #else
 	static void Emit(const char*, const char*) { }

@@ -283,7 +283,13 @@ int high_score::SubmitPendingName(const char* name)
 	// dialog without typing.
 	if (!name[0])
 		name = DlgData.Entry.Name;
+	// Sanitize: control characters (CR/LF would break the key=value settings .ini) -> spaces.
 	std::string nameCopy = name;
+	for (auto& c : nameCopy)
+	{
+		if (static_cast<unsigned char>(c) < 0x20 || c == 0x7F)
+			c = ' ';
+	}
 	name = nameCopy.c_str();
 
 	// Truncate to the 31-byte field without splitting a UTF-8 sequence.
@@ -307,6 +313,15 @@ int high_score::SubmitPendingName(const char* name)
 	place_new_score_into(DlgData);
 	write();
 	return position + 1;
+}
+
+bool high_score::GetPendingEntry(high_score_entry& entry, int& queued)
+{
+	if (!dlg_enter_name)
+		return false;
+	entry = DlgData;
+	queued = static_cast<int>(ScoreQueue.size());
+	return true;
 }
 
 bool high_score::CancelPendingEntry()

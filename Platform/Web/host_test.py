@@ -232,9 +232,16 @@ def main():
                     run.wait_event("highScoreEntry", 1, 5000)
                     hse = run.events("highScoreEntry")[-1]["data"]
                     run.check("highScoreEntry event", True, hse)
+                    pending = json.loads(run.ev("() => pinball.UTF8ToString(pinball._bliss_get_pending_high_score())"))
+                    run.check("get_pending_high_score", pending == hse, pending)
+                    n_hse = len(run.events("highScoreEntry"))
+                    run.check("reemit_pending_high_score",
+                              run.ev("() => pinball._bliss_reemit_pending_high_score()") == 1
+                              and len(run.events("highScoreEntry")) == n_hse + 1)
                     before = run.sync_count()
+                    # CR/LF must not break the settings .ini: stored as spaces.
                     rank = run.ev("() => pinball.ccall('bliss_submit_high_score_name', 'number', "
-                                  "['string'], ['Тестер Пинбола'])")
+                                  "['string'], ['Тестер\\r\\nПинбола'])")
                     run.check("second submit without entry returns 0",
                               run.ev("() => pinball.ccall('bliss_submit_high_score_name', 'number', ['string'], [''])") == 0)
                     run.check("submit returns rank", rank == hse["rank"], rank)
@@ -260,7 +267,7 @@ def main():
             page.wait_for_timeout(500)
             opts = run.options()
             scores = run.high_scores()
-            run.check("high score persists", any(s["name"] == "Тестер Пинбола" for s in scores)
+            run.check("high score persists", any(s["name"] == "Тестер  Пинбола" for s in scores)
                       and scores == before_reload_scores, scores[:2])
             run.check("options persist", opts["sounds"] is False and opts["players"] == 2
                       and opts["controls"]["leftFlipper"]["key"] == 97,

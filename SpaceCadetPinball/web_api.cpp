@@ -206,12 +206,16 @@ void web_api::GameOver(const int* scores, int playerCount, bool demo, bool cheat
 	Emit("gameOver", json.c_str());
 }
 
-void web_api::HighScoreEntry(int score, int position, const char* defaultName, int pending)
+std::string web_api::HighScoreEntryJson(int score, int position, const char* defaultName, int pending)
 {
-	auto json = "{\"score\":" + std::to_string(score) + ",\"position\":" + std::to_string(position) +
+	return "{\"score\":" + std::to_string(score) + ",\"position\":" + std::to_string(position) +
 		",\"rank\":" + std::to_string(position + 1) + ",\"name\":\"" + JsonEscape(defaultName) +
 		"\",\"pending\":" + std::to_string(pending) + "}";
-	Emit("highScoreEntry", json.c_str());
+}
+
+void web_api::HighScoreEntry(int score, int position, const char* defaultName, int pending)
+{
+	Emit("highScoreEntry", HighScoreEntryJson(score, position, defaultName, pending).c_str());
 }
 
 extern "C" {
@@ -383,6 +387,28 @@ EMSCRIPTEN_KEEPALIVE int bliss_submit_high_score_name(const char* name)
 	if (rank > 0)
 		winmain::PersistSettings();
 	return rank;
+}
+
+// The pending name entry as JSON (same payload as the highScoreEntry event) or "null".
+// Lets a remounted host page restore an open name dialog.
+EMSCRIPTEN_KEEPALIVE const char* bliss_get_pending_high_score()
+{
+	high_score_entry entry{};
+	int queued = 0;
+	if (!web_api::Started || !high_score::GetPendingEntry(entry, queued))
+		return Result("null");
+	return Result(web_api::HighScoreEntryJson(entry.Entry.Score, entry.Position, entry.Entry.Name, queued));
+}
+
+// Emit the highScoreEntry event again for the pending entry. Returns 1 if one is pending.
+EMSCRIPTEN_KEEPALIVE int bliss_reemit_pending_high_score()
+{
+	high_score_entry entry{};
+	int queued = 0;
+	if (!web_api::Started || !high_score::GetPendingEntry(entry, queued))
+		return 0;
+	web_api::HighScoreEntry(entry.Entry.Score, entry.Position, entry.Entry.Name, queued);
+	return 1;
 }
 
 // Dismiss the pending high score entry without storing it. Returns 1 if one was pending.

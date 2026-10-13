@@ -28,6 +28,8 @@ public:
 
 	// Web build: the name entry is a host DOM dialog ("highScoreEntry" event).
 	static int SubmitPendingName(const char* name);
+	// Pending name entry (waiting for the host): false if none.
+	static bool GetPendingEntry(high_score_entry& entry, int& queued);
 	static bool CancelPendingEntry();
 	static void ClearAndSave();
 private:
