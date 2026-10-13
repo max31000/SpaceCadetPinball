@@ -18,6 +18,12 @@ bool options::ShowDialog = false;
 GameInput* options::ControlWaitingForInput = nullptr;
 std::vector<OptionBase*> options::AllOptions{};
 
+#ifdef __EMSCRIPTEN__
+constexpr bool WebBuildOpt = true;
+#else
+constexpr bool WebBuildOpt = false;
+#endif
+
 optionsStruct options::Options
 {
 	{
@@ -130,7 +136,7 @@ optionsStruct options::Options
 	{"Linear Filtering", true},
 	{"Frames Per Second", DefFps},
 	{"Updates Per Second", DefUps},
-	{"ShowMenu", true},
+	{"ShowMenu", !WebBuildOpt},
 	{"Uncapped Updates Per Second", false},
 	{"Sound Channels", DefSoundChannels},
 	{"HybridSleep", false},
@@ -149,8 +155,14 @@ optionsStruct options::Options
 	{"Debug Overlay Sounds", true},
 	{"Debug Overlay Ball Depth Grid", true},
 	{"Debug Overlay AABB", true},
+#ifdef __EMSCRIPTEN__
+	// Web build: Russian XP data, Tahoma (Cyrillic) shipped in the preloaded data dir.
+	{"FontFileName", "tahoma.ttf"},
+	{"Language", "ru"},
+#else
 	{"FontFileName", ""},
 	{"Language", translations::GetCurrentLanguage()->ShortName},
+#endif
 	{"Hide Cursor", false},
 };
 
@@ -186,6 +198,11 @@ void options::InitSecondary()
 }
 
 void options::uninit()
+{
+	SaveAll();
+}
+
+void options::SaveAll()
 {
 	Options.Language.V = translations::GetCurrentLanguage()->ShortName;
 	for (const auto opt : AllOptions)

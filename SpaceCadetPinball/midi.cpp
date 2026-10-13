@@ -121,8 +121,10 @@ Mix_Music* midi::load_track(std::string fileName)
 	}
 
 	auto audio = load_track_sub(fileName, true);
+#ifndef __EMSCRIPTEN__
 	if (!audio)
 		audio = load_track_sub(fileName, false);
+#endif
 
 	if (!audio)
 		return nullptr;
@@ -136,7 +138,13 @@ Mix_Music* midi::load_track_sub(std::string fileName, bool isMidi)
 	// FT has music in two formats, depending on game version: MIDI in 16bit, MIDS in 32bit.
 	// 3DPB music is MIDI only.
 	Mix_Music* audio = nullptr;
+#ifdef __EMSCRIPTEN__
+	// Web build: no MIDI synth in the browser. Music is a pre-rendered OGG next to the data
+	// (e.g. PINBALL.OGG / pinball.ogg). No OGG -> no music.
+	fileName += ".OGG";
+#else
 	fileName += isMidi ? ".MID" : ".MDS";
+#endif
 	for (int i = 0; i < 2; i++)
 	{
 		if (i == 1)

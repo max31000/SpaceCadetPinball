@@ -32,8 +32,20 @@ endif()
 # SDL2main is not needed
 set(SDL2_BUILDING_LIBRARY ON)
 
-find_package(SDL2 REQUIRED)
-FIND_PACKAGE(SDL2_mixer REQUIRED)
+if(EMSCRIPTEN)
+    # SDL2 + SDL2_mixer come from Emscripten ports. Music is OGG only (MIDI is pre-rendered),
+    # sound effects are WAV which SDL_mixer always supports.
+    set(EMSCRIPTEN_PORT_FLAGS "-sUSE_SDL=2 -sUSE_SDL_MIXER=2 -sSDL2_MIXER_FORMATS=ogg")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EMSCRIPTEN_PORT_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EMSCRIPTEN_PORT_FLAGS}")
+    # Directory with game data (PINBALL.DAT, SOUND*.WAV, optional PINBALL.OGG, tahoma.ttf),
+    # preloaded into the root of MEMFS. Kept outside of the repository.
+    set(PINBALL_WEB_DATA_DIR "" CACHE PATH "Game data directory to --preload-file into the web build")
+    set(CMAKE_EXECUTABLE_SUFFIX ".html")
+else()
+    find_package(SDL2 REQUIRED)
+    FIND_PACKAGE(SDL2_mixer REQUIRED)
+endif()
 
 include_directories(${SDL2_INCLUDE_DIR} ${SDL2_MIXER_INCLUDE_DIR})
 get_property(dirs DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES)
@@ -164,6 +176,7 @@ set(SOURCE_FILES
         SpaceCadetPinball/TWall.cpp
         SpaceCadetPinball/TWall.h
         SpaceCadetPinball/winmain.cpp
+        SpaceCadetPinball/web_api.cpp
         SpaceCadetPinball/winmain.h
         SpaceCadetPinball/zdrv.cpp
         SpaceCadetPinball/zdrv.h
@@ -216,7 +229,25 @@ if(${CMAKE_VERSION} VERSION_GREATER "3.16.0" OR ${CMAKE_VERSION} VERSION_EQUAL "
             )
 endif()
 
-target_link_libraries(SpaceCadetPinball ${SDL2_LIBRARY} ${SDL2_MIXER_LIBRARY})
+if(EMSCRIPTEN)
+    set(WEB_DIR "${CMAKE_CURRENT_LIST_DIR}/Platform/Web")
+    set(WEB_EXPORTS "_main,_bliss_new_game,_bliss_toggle_pause,_bliss_is_paused,_bliss_pause,_bliss_toggle_sound,_bliss_toggle_music,_bliss_get_options,_bliss_set_option,_bliss_get_high_scores,_bliss_persist")
+    set(WEB_LINK_FLAGS
+        "${EMSCRIPTEN_PORT_FLAGS} -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web -lidbfs.js"
+        "-sEXPORTED_FUNCTIONS=${WEB_EXPORTS}"
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,FS"
+        "--pre-js ${WEB_DIR}/pre.js --shell-file ${WEB_DIR}/shell.html")
+    if(PINBALL_WEB_DATA_DIR)
+        list(APPEND WEB_LINK_FLAGS "--preload-file ${PINBALL_WEB_DATA_DIR}@/")
+    else()
+        message(WARNING "PINBALL_WEB_DATA_DIR is not set: the build will have no game data")
+    endif()
+    string(REPLACE ";" " " WEB_LINK_FLAGS "${WEB_LINK_FLAGS}")
+    set_target_properties(SpaceCadetPinball PROPERTIES LINK_FLAGS "${WEB_LINK_FLAGS}")
+    set_property(TARGET SpaceCadetPinball APPEND PROPERTY LINK_DEPENDS "${WEB_DIR}/pre.js;${WEB_DIR}/shell.html")
+else()
+    target_link_libraries(SpaceCadetPinball ${SDL2_LIBRARY} ${SDL2_MIXER_LIBRARY})
+endif()
 
 # On Windows, copy DLL to output
 if(WIN32)

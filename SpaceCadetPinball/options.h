@@ -109,6 +109,7 @@ public:
 	static void InitPrimary();
 	static void InitSecondary();
 	static void uninit();
+	static void SaveAll();
 	static const std::string& GetSetting(const std::string& key, const std::string& defaultValue);
 	static void SetSetting(const std::string& key, const std::string& value);
 	static int get_int(LPCSTR lpValueName, int defaultValue);

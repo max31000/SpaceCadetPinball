@@ -87,6 +87,7 @@ public:
 	static void Restart();
 	static void UpdateFrameRate();
 	static void HandleGameBinding(GameBindings binding, bool shortcut);
+	static void PersistSettings(bool force = false);
 private:
 	static int return_value;
 	static int mouse_down, last_mouse_x, last_mouse_y;
@@ -108,9 +109,33 @@ private:
 	static float gfrWindow;
 	static int CursorIdleCounter;
 
+	static std::string CmdLine, IniPath, LastPersistedIni;
+	static char *PrefPath, *BasePath;
+	static bool MixOpened, NoAudio, ResetAllOptions;
+	static int PersistCounter;
+
+	// Main loop state, shared by the native loop and the per-frame (emscripten) callback.
+	static unsigned UpdateCounter, FrameCounter;
+	static TimePoint FrameStart, PrevTime;
+	static double UpdateToFrameCounter;
+	static DurationMs SleepRemainder, FrameDuration, UpdateAccumulator;
+
+	static int InitGameInstance();
+	static void ShutdownGameInstance();
+	static void Shutdown();
+	static void MainLoopBegin();
+	static bool MainLoopIteration();
+	static void MainLoopEnd();
+	static void UpdateFpsCounter();
+	static void UpdateMouseNudge();
+	static void UpdateGame(DurationMs dt);
+	static void RenderFrame();
+	static void CheckSdlError();
+#ifdef __EMSCRIPTEN__
+	static void WebFrame(void* arg);
+#endif
 	static void RenderUi();
 	static void RenderFrameTimeDialog();
 	static void HybridSleep(DurationMs seconds);
-	static void MainLoop();
 	static void ImGuiMenuItemWShortcut(GameBindings binding, bool selected = false);
 };

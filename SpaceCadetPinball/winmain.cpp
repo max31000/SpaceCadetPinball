@@ -12,7 +12,17 @@
 #include "translations.h"
 #include "font_selection.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 constexpr const char* winmain::Version;
+
+#ifdef __EMSCRIPTEN__
+constexpr bool WebBuild = true;
+#else
+constexpr bool WebBuild = false;
+#endif
 
 SDL_Window* winmain::MainWindow = nullptr;
 SDL_Renderer* winmain::Renderer = nullptr;
@@ -52,9 +62,19 @@ winmain::DurationMs winmain::SpinThreshold = DurationMs(0.005);
 WelfordState winmain::SleepState{};
 int winmain::CursorIdleCounter = 0;
 
+std::string winmain::CmdLine, winmain::IniPath, winmain::LastPersistedIni;
+char *winmain::PrefPath = nullptr, *winmain::BasePath = nullptr;
+bool winmain::MixOpened = false, winmain::NoAudio = false, winmain::ResetAllOptions = false;
+int winmain::PersistCounter = 0;
+unsigned winmain::UpdateCounter = 0, winmain::FrameCounter = 0;
+winmain::TimePoint winmain::FrameStart, winmain::PrevTime;
+double winmain::UpdateToFrameCounter = 0;
+winmain::DurationMs winmain::SleepRemainder, winmain::FrameDuration, winmain::UpdateAccumulator;
+
 int winmain::WinMain(LPCSTR lpCmdLine)
 {
 	std::set_new_handler(memalloc_failure);
+	CmdLine = lpCmdLine;
 
 	printf("Game version: %s\n", Version);
 	printf("Command line: %s\n", lpCmdLine);
@@ -111,16 +131,25 @@ int winmain::WinMain(LPCSTR lpCmdLine)
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 
-	auto prefPath = SDL_GetPrefPath("", "SpaceCadetPinball");
-	auto basePath = SDL_GetBasePath();
+	PrefPath = SDL_GetPrefPath("", "SpaceCadetPinball");
+	BasePath = SDL_GetBasePath();
+	printf("Pref path: %s\n", PrefPath ? PrefPath : "(null)");
 
 	// SDL mixer init
-	bool mixOpened = false, noAudio = strstr(lpCmdLine, "-noaudio") != nullptr;
-	if (!noAudio)
+	MixOpened = false;
+	NoAudio = strstr(lpCmdLine, "-noaudio") != nullptr;
+	if (!NoAudio)
 	{
-		if ((Mix_Init(MIX_INIT_MID_Proxy) & MIX_INIT_MID_Proxy) == 0)
+		// The web build plays pre-rendered OGG music instead of MIDI.
+		const int mixInitFlags =
+#ifdef __EMSCRIPTEN__
+			MIX_INIT_OGG;
+#else
+			MIX_INIT_MID_Proxy;
+#endif
+		if ((Mix_Init(mixInitFlags) & mixInitFlags) == 0)
 		{
-			printf("Could not initialize SDL MIDI, music might not work.\nSDL Error: %s\n", SDL_GetError());
+			printf("Could not initialize SDL music decoder, music might not work.\nSDL Error: %s\n", SDL_GetError());
 			SDL_ClearError();
 		}
 		if (Mix_OpenAudio(MIX_DEFAULT_FREQUENCY, MIX_DEFAULT_FORMAT, 2, 1024) != 0)
@@ -129,7 +158,7 @@ int winmain::WinMain(LPCSTR lpCmdLine)
 			SDL_ClearError();
 		}
 		else
-			mixOpened = true;
+			MixOpened = true;
 	}
 
 	{
@@ -149,308 +178,478 @@ int winmain::WinMain(LPCSTR lpCmdLine)
 		}
 	}
 
-	auto resetAllOptions = strstr(lpCmdLine, "-reset") != nullptr;
+	ResetAllOptions = strstr(lpCmdLine, "-reset") != nullptr;
+
+#ifdef __EMSCRIPTEN__
+	// Browsers own the event loop: run one iteration per requestAnimationFrame.
+	// simulate_infinite_loop=1 unwinds the stack, so WinMain never returns here.
+	if (InitGameInstance())
+		return 1;
+	MainLoopBegin();
+	emscripten_set_main_loop_arg(WebFrame, nullptr, 0, 1);
+	return 0;
+#else
 	do
 	{
 		restart = false;
-
-		// ImGui init
-		IMGUI_CHECKVERSION();
-		ImGui::CreateContext();
-		ImGuiIO& io = ImGui::GetIO();
-		ImIO = &io;
-		auto iniPath = std::string(prefPath) + "imgui_pb.ini";
-		io.IniFilename = iniPath.c_str();
-
-		// First option initialization step: just load settings from .ini. Needs ImGui context.
-		options::InitPrimary();
-		if (resetAllOptions)
-		{
-			resetAllOptions = false;
-			options::ResetAllOptions();
-		}
-
-		if (!Options.FontFileName.V.empty())
-		{
-			ImVector<ImWchar> ranges;
-			translations::GetGlyphRange(&ranges);
-			ImFontConfig fontConfig{};
-
-			// ToDo: further tweak font options, maybe try imgui_freetype
-			fontConfig.OversampleV = 2;
-			fontConfig.OversampleH = 4;
-
-			// ToDo: improve font file test, checking if file exists is not enough
-			auto fontLoaded = false;
-			auto fileName = Options.FontFileName.V.c_str();
-			auto fileHandle = fopenu(fileName, "rb");
-			if (fileHandle)
-			{
-				fclose(fileHandle);
-
-				// ToDo: Bind font size to UI scale
-				if (io.Fonts->AddFontFromFileTTF(fileName, 13.f, &fontConfig, ranges.Data))
-					fontLoaded = true;
-			}
-
-			if (!fontLoaded)
-				printf("Failed to load font: %s, using embedded font.\n", fileName);
-			io.Fonts->Build();
-		}
-		ImGui_Render_Init(renderer);
-		ImGui::StyleColorsDark();
-
-		ImGui_ImplSDL2_InitForSDLRenderer(window, Renderer);
-		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
-
-		// Data search order: WD, executable path, user pref path, platform specific paths.
-		std::vector<const char*> searchPaths
-		{
-			{
-				"",
-				basePath,
-				prefPath
-			}
-		};
-		searchPaths.insert(searchPaths.end(), std::begin(PlatformDataPaths), std::end(PlatformDataPaths));
-		pb::SelectDatFile(searchPaths);
-
-		// Second step: run updates that depend on .DAT file selection
-		options::InitSecondary();
-
-		Sound::Init(mixOpened, Options.SoundChannels, Options.Sounds, Options.SoundVolume);
-		if (!mixOpened)
-			Options.Sounds = false;
-
-		if (!midi::music_init(mixOpened, Options.MusicVolume))
-			Options.Music = false;
-
-		if (pb::init())
-		{
-			std::string message = "The .dat file is missing.\n"
-				"Make sure that the game data is present in any of the following locations:\n";
-			for (auto path : searchPaths)
-			{
-				if (path)
-				{
-					message = message + (path[0] ? path : "working directory") + "\n";
-				}
-			}
-			pb::ShowMessageBox(SDL_MESSAGEBOX_ERROR, "Could not load game data", message.c_str());
+		if (InitGameInstance())
 			return 1;
-		}
 
-		fullscrn::init();
-
-		pb::reset_table();
-		pb::firsttime_setup();
-
-		if (strstr(lpCmdLine, "-fullscreen"))
+		MainLoopBegin();
+		while (MainLoopIteration())
 		{
-			Options.FullScreen = true;
 		}
+		MainLoopEnd();
 
-		if (!Options.FullScreen)
-		{
-			auto resInfo = &fullscrn::resolution_array[fullscrn::GetResolution()];
-			SDL_SetWindowSize(MainWindow, resInfo->TableWidth, resInfo->TableHeight);
-		}
-		SDL_ShowWindow(window);
-		fullscrn::set_screen_mode(Options.FullScreen);
-
-		if (strstr(lpCmdLine, "-demo"))
-			pb::toggle_demo();
-		else
-			pb::replay_level(false);
-
-		MainLoop();
-
-		options::uninit();
-		midi::music_shutdown();
-		Sound::Close();
-		pb::uninit();
-
-		ImGui_Render_Shutdown();
-		ImGui_ImplSDL2_Shutdown();
-		ImGui::DestroyContext();
+		ShutdownGameInstance();
 	}
 	while (restart);
 
-	if (!noAudio)
+	Shutdown();
+	return return_value;
+#endif
+}
+
+int winmain::InitGameInstance()
+{
+	auto renderer = Renderer;
+	auto window = MainWindow;
+
+	// ImGui init
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO();
+	ImIO = &io;
+	IniPath = std::string(PrefPath) + "imgui_pb.ini";
+	io.IniFilename = IniPath.c_str();
+
+	// First option initialization step: just load settings from .ini. Needs ImGui context.
+	options::InitPrimary();
+	if (ResetAllOptions)
 	{
-		if (mixOpened)
+		ResetAllOptions = false;
+		options::ResetAllOptions();
+	}
+#ifdef __EMSCRIPTEN__
+	// The host page provides the menu; the ImGui menu bar stays hidden.
+	Options.ShowMenu = false;
+	Options.FullScreen = false;
+#endif
+
+	if (!Options.FontFileName.V.empty())
+	{
+		ImVector<ImWchar> ranges;
+		translations::GetGlyphRange(&ranges);
+		ImFontConfig fontConfig{};
+
+		// ToDo: further tweak font options, maybe try imgui_freetype
+		fontConfig.OversampleV = 2;
+		fontConfig.OversampleH = 4;
+
+		// ToDo: improve font file test, checking if file exists is not enough
+		auto fontLoaded = false;
+		auto fileName = Options.FontFileName.V.c_str();
+		auto fileHandle = fopenu(fileName, "rb");
+		if (fileHandle)
+		{
+			fclose(fileHandle);
+
+			// ToDo: Bind font size to UI scale
+			if (io.Fonts->AddFontFromFileTTF(fileName, 13.f, &fontConfig, ranges.Data))
+				fontLoaded = true;
+		}
+
+		if (!fontLoaded)
+			printf("Failed to load font: %s, using embedded font.\n", fileName);
+		else
+			printf("Loaded font: %s\n", fileName);
+		io.Fonts->Build();
+	}
+	ImGui_Render_Init(renderer);
+	ImGui::StyleColorsDark();
+
+	ImGui_ImplSDL2_InitForSDLRenderer(window, Renderer);
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+
+	// Data search order: WD, executable path, user pref path, platform specific paths.
+	std::vector<const char*> searchPaths
+	{
+		{
+			"",
+			BasePath,
+			PrefPath
+		}
+	};
+	searchPaths.insert(searchPaths.end(), std::begin(PlatformDataPaths), std::end(PlatformDataPaths));
+	pb::SelectDatFile(searchPaths);
+
+	// Second step: run updates that depend on .DAT file selection
+	options::InitSecondary();
+
+	Sound::Init(MixOpened, Options.SoundChannels, Options.Sounds, Options.SoundVolume);
+	if (!MixOpened)
+		Options.Sounds = false;
+
+	if (!midi::music_init(MixOpened, Options.MusicVolume))
+		Options.Music = false;
+
+	if (pb::init())
+	{
+		std::string message = "The .dat file is missing.\n"
+			"Make sure that the game data is present in any of the following locations:\n";
+		for (auto path : searchPaths)
+		{
+			if (path)
+			{
+				message = message + (path[0] ? path : "working directory") + "\n";
+			}
+		}
+		pb::ShowMessageBox(SDL_MESSAGEBOX_ERROR, "Could not load game data", message.c_str());
+		return 1;
+	}
+
+	fullscrn::init();
+
+	pb::reset_table();
+	pb::firsttime_setup();
+
+	if (strstr(CmdLine.c_str(), "-fullscreen"))
+	{
+		Options.FullScreen = true;
+	}
+
+	if (!Options.FullScreen)
+	{
+		auto resInfo = &fullscrn::resolution_array[fullscrn::GetResolution()];
+		SDL_SetWindowSize(MainWindow, resInfo->TableWidth, resInfo->TableHeight);
+	}
+	SDL_ShowWindow(window);
+	fullscrn::set_screen_mode(Options.FullScreen);
+
+	if (strstr(CmdLine.c_str(), "-demo"))
+		pb::toggle_demo();
+	else
+		pb::replay_level(false);
+
+	return 0;
+}
+
+void winmain::ShutdownGameInstance()
+{
+	options::uninit();
+	PersistSettings(true);
+	midi::music_shutdown();
+	Sound::Close();
+	pb::uninit();
+
+	ImGui_Render_Shutdown();
+	ImGui_ImplSDL2_Shutdown();
+	ImGui::DestroyContext();
+	ImIO = nullptr;
+}
+
+void winmain::Shutdown()
+{
+	if (!NoAudio)
+	{
+		if (MixOpened)
 			Mix_CloseAudio();
 		Mix_Quit();
 	}
 
-	SDL_free(basePath);
-	SDL_free(prefPath);
-	SDL_DestroyRenderer(renderer);
-	SDL_DestroyWindow(window);
+	SDL_free(BasePath);
+	SDL_free(PrefPath);
+	BasePath = PrefPath = nullptr;
+	SDL_DestroyRenderer(Renderer);
+	SDL_DestroyWindow(MainWindow);
+	Renderer = nullptr;
+	MainWindow = nullptr;
 	SDL_Quit();
-
-	return return_value;
 }
 
-void winmain::MainLoop()
+void winmain::PersistSettings(bool force)
+{
+#ifdef __EMSCRIPTEN__
+	// Settings and high scores live in the ImGui .ini under the SDL pref path, which the
+	// web build mounts as IDBFS. Flush option values into the settings map, write the .ini
+	// only when its content changed and push MEMFS -> IndexedDB.
+	if (!ImGui::GetCurrentContext() || !ImIO)
+		return;
+	if (!force)
+		options::SaveAll();
+	size_t iniSize = 0;
+	auto iniData = ImGui::SaveIniSettingsToMemory(&iniSize);
+	std::string ini(iniData, iniSize);
+	// SaveAll marks the .ini dirty on every call; the content check below decides instead.
+	ImGui::GetCurrentContext()->SettingsDirtyTimer = 0.0f;
+	if (ini == LastPersistedIni)
+		return;
+	LastPersistedIni = ini;
+	ImGui::SaveIniSettingsToDisk(ImIO->IniFilename);
+	EM_ASM({
+		if (Module["blissSyncfs"]) Module["blissSyncfs"]();
+		else FS.syncfs(false, function(err) { if (err) console.error("[bliss] syncfs failed", err); });
+	});
+#else
+	(void)force;
+#endif
+}
+
+void winmain::MainLoopBegin()
 {
 	bQuit = false;
-	unsigned updateCounter = 0, frameCounter = 0;
-	auto frameStart = Clock::now();
-	double UpdateToFrameCounter = 0;
-	DurationMs sleepRemainder(0), frameDuration(TargetFrameTime);
-	auto prevTime = frameStart;
+	UpdateCounter = FrameCounter = 0;
+	FrameStart = Clock::now();
+	UpdateToFrameCounter = 0;
+	SleepRemainder = DurationMs(0);
+	FrameDuration = TargetFrameTime;
+	UpdateAccumulator = DurationMs(0);
+	PrevTime = FrameStart;
+}
 
-	while (true)
-	{
-		if (DispFrameRate)
-		{
-			auto curTime = Clock::now();
-			if (curTime - prevTime > DurationMs(1000))
-			{
-				char buf[60];
-				auto elapsedSec = DurationMs(curTime - prevTime).count() * 0.001;
-				snprintf(buf, sizeof buf, "Updates/sec = %02.02f Frames/sec = %02.02f ",
-				         updateCounter / elapsedSec, frameCounter / elapsedSec);
-				SDL_SetWindowTitle(MainWindow, buf);
-				FpsDetails = buf;
-				frameCounter = updateCounter = 0;
-				prevTime = curTime;
-			}
-		}
-
-		if (!ProcessWindowMessages() || bQuit)
-			break;
-
-		if (has_focus)
-		{
-			if (mouse_down)
-			{
-				int x, y, w, h;
-				SDL_GetMouseState(&x, &y);
-				SDL_GetWindowSize(MainWindow, &w, &h);
-				float dx = static_cast<float>(last_mouse_x - x) / static_cast<float>(w);
-				float dy = static_cast<float>(y - last_mouse_y) / static_cast<float>(h);
-				pb::ballset(dx, dy);
-
-				// Original creates continuous mouse movement with mouse capture.
-				// Alternative solution: mouse warp at window edges.
-				int xMod = 0, yMod = 0;
-				if (x == 0 || x >= w - 1)
-					xMod = w - 2;
-				if (y == 0 || y >= h - 1)
-					yMod = h - 2;
-				if (xMod != 0 || yMod != 0)
-				{
-					// Mouse warp does not work over remote desktop or in some VMs
-					x = abs(x - xMod);
-					y = abs(y - yMod);
-					SDL_WarpMouseInWindow(MainWindow, x, y);
-				}
-
-				last_mouse_x = x;
-				last_mouse_y = y;
-			}
-			if (!single_step && !no_time_loss)
-			{
-				auto dt = static_cast<float>(frameDuration.count());
-				pb::frame(dt);
-				if (DispGRhistory)
-				{
-					auto targetSize = static_cast<unsigned>(static_cast<float>(Options.UpdatesPerSecond) * gfrWindow);
-					if (gfrDisplay.size() != targetSize)
-					{
-						gfrDisplay.resize(targetSize, static_cast<float>(TargetFrameTime.count()));
-						gfrOffset = 0;
-					}
-					gfrDisplay[gfrOffset] = dt;
-					gfrOffset = (gfrOffset + 1) % gfrDisplay.size();
-				}
-				updateCounter++;
-			}
-			no_time_loss = false;
-
-			if (UpdateToFrameCounter >= UpdateToFrameRatio)
-			{
-				if (Options.HideCursor && CursorIdleCounter <= 0)
-					ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-				ImGui_ImplSDL2_NewFrame();
-				ImGui_Render_NewFrame();
-				ImGui::NewFrame();
-				RenderUi();
-
-				SDL_RenderClear(Renderer);
-				// Alternative clear hack, clear might fail on some systems
-				// Todo: remove original clear, if save for all platforms
-				SDL_RenderFillRect(Renderer, nullptr);
-				render::PresentVScreen();
-
-				ImGui::Render();
-				ImGui_Render_RenderDrawData(ImGui::GetDrawData());
-
-				SDL_RenderPresent(Renderer);
-				frameCounter++;
-				UpdateToFrameCounter -= UpdateToFrameRatio;
-			}
-
-			auto sdlError = SDL_GetError();
-			if (sdlError[0] || !PrevSdlError.empty())
-			{
-				if (sdlError[0])
-					SDL_ClearError();
-
-				// Rate limit duplicate SDL error messages.
-				if (sdlError != PrevSdlError)
-				{
-					PrevSdlError = sdlError;
-					if (PrevSdlErrorCount > 0)
-					{
-						printf("SDL Error: ^ Previous Error Repeated %u Times\n", PrevSdlErrorCount + 1);
-						PrevSdlErrorCount = 0;
-					}
-
-					if (sdlError[0])
-						printf("SDL Error: %s\n", sdlError);
-				}
-				else
-				{
-					PrevSdlErrorCount++;
-				}
-			}
-
-			auto updateEnd = Clock::now();
-			auto targetTimeDelta = TargetFrameTime - DurationMs(updateEnd - frameStart) - sleepRemainder;
-
-			TimePoint frameEnd;
-			if (targetTimeDelta > DurationMs::zero() && !Options.UncappedUpdatesPerSecond)
-			{
-				if (Options.HybridSleep)
-					HybridSleep(targetTimeDelta);
-				else
-					std::this_thread::sleep_for(targetTimeDelta);
-				frameEnd = Clock::now();
-			}
-			else
-			{
-				frameEnd = updateEnd;
-			}
-
-			// Limit duration to 2 * target time
-			sleepRemainder = Clamp(DurationMs(frameEnd - updateEnd) - targetTimeDelta, -TargetFrameTime,
-			                       TargetFrameTime);
-			frameDuration = std::min<DurationMs>(DurationMs(frameEnd - frameStart), 2 * TargetFrameTime);
-			frameStart = frameEnd;
-			UpdateToFrameCounter++;
-
-			CursorIdleCounter = std::max(CursorIdleCounter - static_cast<int>(frameDuration.count()), 0);
-		}
-	}
-
+void winmain::MainLoopEnd()
+{
 	if (PrevSdlErrorCount > 0)
 	{
 		printf("SDL Error: ^ Previous Error Repeated %u Times\n", PrevSdlErrorCount);
 	}
 }
+
+void winmain::UpdateFpsCounter()
+{
+	if (DispFrameRate)
+	{
+		auto curTime = Clock::now();
+		if (curTime - PrevTime > DurationMs(1000))
+		{
+			char buf[60];
+			auto elapsedSec = DurationMs(curTime - PrevTime).count() * 0.001;
+			snprintf(buf, sizeof buf, "Updates/sec = %02.02f Frames/sec = %02.02f ",
+			         UpdateCounter / elapsedSec, FrameCounter / elapsedSec);
+			SDL_SetWindowTitle(MainWindow, buf);
+			FpsDetails = buf;
+			FrameCounter = UpdateCounter = 0;
+			PrevTime = curTime;
+		}
+	}
+}
+
+void winmain::UpdateMouseNudge()
+{
+	if (!mouse_down)
+		return;
+
+	int x, y, w, h;
+	SDL_GetMouseState(&x, &y);
+	SDL_GetWindowSize(MainWindow, &w, &h);
+	float dx = static_cast<float>(last_mouse_x - x) / static_cast<float>(w);
+	float dy = static_cast<float>(y - last_mouse_y) / static_cast<float>(h);
+	pb::ballset(dx, dy);
+
+	// Original creates continuous mouse movement with mouse capture.
+	// Alternative solution: mouse warp at window edges.
+	int xMod = 0, yMod = 0;
+	if (x == 0 || x >= w - 1)
+		xMod = w - 2;
+	if (y == 0 || y >= h - 1)
+		yMod = h - 2;
+	if (xMod != 0 || yMod != 0)
+	{
+		// Mouse warp does not work over remote desktop or in some VMs
+		x = abs(x - xMod);
+		y = abs(y - yMod);
+		SDL_WarpMouseInWindow(MainWindow, x, y);
+	}
+
+	last_mouse_x = x;
+	last_mouse_y = y;
+}
+
+void winmain::UpdateGame(DurationMs frameDuration)
+{
+	auto dt = static_cast<float>(frameDuration.count());
+	pb::frame(dt);
+	if (DispGRhistory)
+	{
+		auto targetSize = static_cast<unsigned>(static_cast<float>(Options.UpdatesPerSecond) * gfrWindow);
+		if (gfrDisplay.size() != targetSize)
+		{
+			gfrDisplay.resize(targetSize, static_cast<float>(TargetFrameTime.count()));
+			gfrOffset = 0;
+		}
+		gfrDisplay[gfrOffset] = dt;
+		gfrOffset = (gfrOffset + 1) % gfrDisplay.size();
+	}
+	UpdateCounter++;
+}
+
+void winmain::RenderFrame()
+{
+	if (Options.HideCursor && CursorIdleCounter <= 0)
+		ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+	ImGui_ImplSDL2_NewFrame();
+	ImGui_Render_NewFrame();
+	ImGui::NewFrame();
+	RenderUi();
+
+	SDL_RenderClear(Renderer);
+	// Alternative clear hack, clear might fail on some systems
+	// Todo: remove original clear, if save for all platforms
+	SDL_RenderFillRect(Renderer, nullptr);
+	render::PresentVScreen();
+
+	ImGui::Render();
+	ImGui_Render_RenderDrawData(ImGui::GetDrawData());
+
+	SDL_RenderPresent(Renderer);
+	FrameCounter++;
+}
+
+void winmain::CheckSdlError()
+{
+	auto sdlError = SDL_GetError();
+	if (sdlError[0] || !PrevSdlError.empty())
+	{
+		if (sdlError[0])
+			SDL_ClearError();
+
+		// Rate limit duplicate SDL error messages.
+		if (sdlError != PrevSdlError)
+		{
+			PrevSdlError = sdlError;
+			if (PrevSdlErrorCount > 0)
+			{
+				printf("SDL Error: ^ Previous Error Repeated %u Times\n", PrevSdlErrorCount + 1);
+				PrevSdlErrorCount = 0;
+			}
+
+			if (sdlError[0])
+				printf("SDL Error: %s\n", sdlError);
+		}
+		else
+		{
+			PrevSdlErrorCount++;
+		}
+	}
+}
+
+bool winmain::MainLoopIteration()
+{
+	UpdateFpsCounter();
+
+	if (!ProcessWindowMessages() || bQuit)
+		return false;
+
+	if (has_focus)
+	{
+		UpdateMouseNudge();
+		if (!single_step && !no_time_loss)
+			UpdateGame(FrameDuration);
+		no_time_loss = false;
+
+		if (UpdateToFrameCounter >= UpdateToFrameRatio)
+		{
+			RenderFrame();
+			UpdateToFrameCounter -= UpdateToFrameRatio;
+		}
+
+		CheckSdlError();
+
+		auto updateEnd = Clock::now();
+		auto targetTimeDelta = TargetFrameTime - DurationMs(updateEnd - FrameStart) - SleepRemainder;
+
+		TimePoint frameEnd;
+		if (targetTimeDelta > DurationMs::zero() && !Options.UncappedUpdatesPerSecond)
+		{
+			if (Options.HybridSleep)
+				HybridSleep(targetTimeDelta);
+			else
+				std::this_thread::sleep_for(targetTimeDelta);
+			frameEnd = Clock::now();
+		}
+		else
+		{
+			frameEnd = updateEnd;
+		}
+
+		// Limit duration to 2 * target time
+		SleepRemainder = Clamp(DurationMs(frameEnd - updateEnd) - targetTimeDelta, -TargetFrameTime,
+		                       TargetFrameTime);
+		FrameDuration = std::min<DurationMs>(DurationMs(frameEnd - FrameStart), 2 * TargetFrameTime);
+		FrameStart = frameEnd;
+		UpdateToFrameCounter++;
+
+		CursorIdleCounter = std::max(CursorIdleCounter - static_cast<int>(FrameDuration.count()), 0);
+	}
+	return true;
+}
+
+#ifdef __EMSCRIPTEN__
+void winmain::WebFrame(void*)
+{
+	// One call per requestAnimationFrame. The browser paces the loop, so there is no sleeping:
+	// game state advances in fixed TargetFrameTime (1000/UPS ms) steps from an accumulator of
+	// real elapsed time, and exactly one frame is rendered per callback (display refresh rate).
+	UpdateFpsCounter();
+
+	if (!ProcessWindowMessages() || bQuit)
+	{
+		MainLoopEnd();
+		ShutdownGameInstance();
+		if (restart)
+		{
+			restart = false;
+			if (InitGameInstance())
+			{
+				emscripten_cancel_main_loop();
+				return;
+			}
+			MainLoopBegin();
+			return;
+		}
+		emscripten_cancel_main_loop();
+		Shutdown();
+		return;
+	}
+
+	auto now = Clock::now();
+	auto elapsed = DurationMs(now - FrameStart);
+	FrameStart = now;
+	// Tab switches / long stalls: do not try to catch up more than 100 ms of game time.
+	if (elapsed > DurationMs(100))
+		elapsed = DurationMs(100);
+
+	if (has_focus)
+	{
+		UpdateMouseNudge();
+		if (!single_step && !no_time_loss)
+		{
+			UpdateAccumulator += elapsed;
+			while (UpdateAccumulator >= TargetFrameTime)
+			{
+				UpdateGame(TargetFrameTime);
+				UpdateAccumulator -= TargetFrameTime;
+			}
+		}
+		else
+		{
+			UpdateAccumulator = DurationMs(0);
+		}
+		no_time_loss = false;
+		CursorIdleCounter = std::max(CursorIdleCounter - static_cast<int>(elapsed.count()), 0);
+	}
+
+	RenderFrame();
+	CheckSdlError();
+
+	// Cheap periodic check (~1 s): persist settings/high scores when they changed.
+	if (++PersistCounter >= 60)
+	{
+		PersistCounter = 0;
+		PersistSettings();
+	}
+}
+#endif
 
 void winmain::RenderUi()
 {
@@ -458,7 +657,7 @@ void winmain::RenderUi()
 	ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4{});
 	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{});
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
-	if (!Options.ShowMenu && ImGui::BeginMainMenuBar())
+	if (!Options.ShowMenu && !WebBuild && ImGui::BeginMainMenuBar())
 	{
 		if (ImGui::MenuItem("Menu"))
 		{
@@ -476,7 +675,7 @@ void winmain::RenderUi()
 		ImGui::ShowDemoWindow(&ShowImGuiDemo);
 #endif
 
-	if (Options.ShowMenu && ImGui::BeginMainMenuBar())
+	if (Options.ShowMenu && !WebBuild && ImGui::BeginMainMenuBar())
 	{
 		int currentMenuHeight = static_cast<int>(ImGui::GetWindowSize().y);
 		if (MainMenuHeight != currentMenuHeight)
@@ -1052,7 +1251,7 @@ int winmain::ProcessWindowMessages()
 {
 	static auto idleWait = 0;
 	SDL_Event event;
-	if (has_focus)
+	if (has_focus || WebBuild)
 	{
 		idleWait = static_cast<int>(TargetFrameTime.count());
 		while (SDL_PollEvent(&event))
@@ -1313,6 +1512,8 @@ void winmain::HandleGameBinding(GameBindings binding, bool shortcut)
 		new_game();
 		break;
 	case GameBindings::ToggleFullScreen:
+		if (WebBuild)
+			break;
 		options::toggle(Menu1::Full_Screen);
 		break;
 	case GameBindings::ToggleSounds:
@@ -1326,9 +1527,13 @@ void winmain::HandleGameBinding(GameBindings binding, bool shortcut)
 		options::ShowControlDialog();
 		break;
 	case GameBindings::ToggleMenuDisplay:
+		if (WebBuild)
+			break;
 		options::toggle(Menu1::Show_Menu);
 		break;
 	case GameBindings::Exit:
+		if (WebBuild)
+			break;
 		if (!shortcut)
 		{
 			SDL_Event event{SDL_QUIT};
