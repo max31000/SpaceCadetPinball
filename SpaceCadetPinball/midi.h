@@ -99,6 +99,8 @@ public:
 	static void music_play();
 	static void music_stop();
 	static void SetVolume(int volume);
+	// Re-apply the current volume (after Sound::MasterVolume changed).
+	static void RefreshVolume() { SetVolume(Volume); }
 	static bool play_track(MidiTracks track, bool replay);
 	static MidiTracks get_active_track();
 	static bool ReloadMusic();

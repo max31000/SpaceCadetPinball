@@ -464,7 +464,7 @@ EMSCRIPTEN_KEEPALIVE int bliss_set_ups(int ups)
 EMSCRIPTEN_KEEPALIVE int bliss_set_master_volume(int percent)
 {
 	Sound::SetMasterVolume(percent);
-	midi::SetVolume(options::Options.MusicVolume);
+	midi::RefreshVolume(); // no options access: safe before main() (e.g. from preRun)
 	return Sound::MasterVolume;
 }
 

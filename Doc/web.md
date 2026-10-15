@@ -107,7 +107,7 @@ right away.
 | `bliss_set_language` | `int(char* code)` | `ru_xp` (default), `ru`, `en`, …; restarts the game instance (current game is lost); 0 for an unknown code |
 | `bliss_set_ups` | `int(int)` | Simulation steps per second, clamped to 60..360; returns the applied value |
 | `bliss_persist` | `void()` | Flush settings + high scores to IndexedDB now (also done on `pagehide`) |
-| `bliss_set_master_volume` | `int(int percent)` | Host master volume 0–100 (clamped, default 100): the mixer plays sounds at `soundVolume × percent / 100` and music at `musicVolume × percent / 100`; the in-game options (`sounds`, `music`, `soundVolume`, `musicVolume`) are unchanged and keep working. Callable before `started`, survives `bliss_set_language`, not persisted (the host owns it). Returns the applied value |
+| `bliss_set_master_volume` | `int(int percent)` | Host master volume 0–100 (clamped, default 100): the mixer plays sounds at `soundVolume × percent / 100` and music at `musicVolume × percent / 100`; the in-game options (`sounds`, `music`, `soundVolume`, `musicVolume`) are unchanged and keep working. Callable before `started` (also from `preRun`), survives `bliss_set_language`, not persisted (the host owns it). Returns the applied value |
 | `bliss_get_master_volume` | `int()` | Current master volume 0–100 |
 
 `bliss_set_option` names: `sounds`, `music` (0/1), `players` (1–4), `soundVolume`,

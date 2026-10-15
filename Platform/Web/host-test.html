@@ -14,6 +14,7 @@
       data   URL of the directory with the original XP files (default /pinball-data/)
       scale  CSS scale of the 600x416 canvas (default 1.5)
       ups    pin UPS instead of the measured display refresh rate
+      master master volume 0..100, applied from preRun (before main)
   -->
   <style>
     html, body { margin: 0; background: #3a6ea5; color: #000; font: 11px Tahoma, sans-serif; }
@@ -121,6 +122,7 @@
     printErr: (t) => console.warn(t),
     onBlissEvent,
     preRun: [(M) => {
+      if (params.get('master')) M._bliss_set_master_volume(parseInt(params.get('master'), 10));
       M.addRunDependency('bliss-data');
       filesPromise.then((files) => {
         for (const [name, bytes] of files) M.FS.writeFile(`/data/${name}`, bytes);

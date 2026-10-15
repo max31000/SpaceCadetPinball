@@ -280,6 +280,11 @@ def main():
                     run.check("highScoreEntry event", False, str(e))
 
             # ---- master volume ---------------------------------------------------------------
+            run.load(url + "&master=37")  # set from preRun, before main()
+            run.check("master volume from preRun survives start",
+                      run.ev("() => pinball._bliss_get_master_volume()") == 37
+                      and run.options()["musicVolume"] == 128,
+                      run.ev("() => pinball._bliss_get_master_volume()"))
             vol = "(v) => pinball._bliss_set_master_volume(v)"
             run.check("master volume clamps", [run.page.evaluate(vol, v) for v in (150, -5, 100)] == [100, 0, 100])
             before_opts = run.options()
