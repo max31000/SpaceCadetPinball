@@ -457,6 +457,22 @@ EMSCRIPTEN_KEEPALIVE int bliss_set_ups(int ups)
 	return ups;
 }
 
+// Host master volume 0..100 (clamped): scales the in-game sound and music volumes
+// (soundVolume/musicVolume options stay unchanged; sounds/music on/off still apply).
+// Works before "started" too (the value is applied when the mixer opens). Not persisted.
+// Returns the applied value.
+EMSCRIPTEN_KEEPALIVE int bliss_set_master_volume(int percent)
+{
+	Sound::SetMasterVolume(percent);
+	midi::SetVolume(options::Options.MusicVolume);
+	return Sound::MasterVolume;
+}
+
+EMSCRIPTEN_KEEPALIVE int bliss_get_master_volume()
+{
+	return Sound::MasterVolume;
+}
+
 // Call after writing PINBALL.OGG into the data dir later than start (lazy music loading).
 // Returns 1 if the music track is available; it starts playing when music is enabled.
 EMSCRIPTEN_KEEPALIVE int bliss_reload_music()

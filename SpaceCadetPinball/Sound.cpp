@@ -8,6 +8,7 @@ bool Sound::enabled_flag = false;
 std::vector<ChannelInfo> Sound::Channels{};
 int Sound::Volume = MIX_MAX_VOLUME;
 bool Sound::MixOpen = false;
+int Sound::MasterVolume = 100;
 
 void Sound::Init(bool mixOpen, int channels, bool enableFlag, int volume)
 {
@@ -150,5 +151,16 @@ void Sound::SetVolume(int volume)
 {
 	Volume = volume;
 	if (MixOpen)
-		Mix_Volume(-1, volume);
+		Mix_Volume(-1, ScaleByMaster(volume));
+}
+
+void Sound::SetMasterVolume(int percent)
+{
+	MasterVolume = Clamp(percent, 0, 100);
+	SetVolume(Volume);
+}
+
+int Sound::ScaleByMaster(int volume)
+{
+	return (volume * MasterVolume + 50) / 100;
 }

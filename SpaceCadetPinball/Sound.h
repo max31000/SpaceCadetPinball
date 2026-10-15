@@ -23,6 +23,10 @@ public:
 	static void FreeSound(Mix_Chunk* wave);
 	static void SetChannels(int channels);
 	static void SetVolume(int volume);
+	// Host-side master volume 0..100 (web build); scales Volume, not stored in options.
+	static void SetMasterVolume(int percent);
+	static int ScaleByMaster(int volume);
+	static int MasterVolume;
 private:
 	static int num_channels;
 	static bool enabled_flag;

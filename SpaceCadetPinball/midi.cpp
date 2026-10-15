@@ -3,6 +3,7 @@
 
 
 #include "pb.h"
+#include "Sound.h"
 
 
 std::vector<Mix_Music*> midi::LoadedTracks{};
@@ -105,7 +106,7 @@ void midi::SetVolume(int volume)
 {
 	Volume = volume;
 	if (MixOpen)
-		Mix_VolumeMusic(volume);
+		Mix_VolumeMusic(Sound::ScaleByMaster(volume));
 }
 
 Mix_Music* midi::load_track(std::string fileName)

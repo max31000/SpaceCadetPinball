@@ -236,7 +236,7 @@ endif()
 
 if(EMSCRIPTEN)
     set(WEB_DIR "${CMAKE_CURRENT_LIST_DIR}/Platform/Web")
-    set(WEB_EXPORTS "_main,_bliss_new_game,_bliss_launch_ball,_bliss_demo_toggle,_bliss_toggle_pause,_bliss_is_paused,_bliss_pause,_bliss_toggle_sound,_bliss_toggle_music,_bliss_get_options,_bliss_set_option,_bliss_get_high_scores,_bliss_submit_high_score_name,_bliss_get_pending_high_score,_bliss_reemit_pending_high_score,_bliss_cancel_high_score,_bliss_clear_high_scores,_bliss_set_language,_bliss_set_ups,_bliss_reload_music,_bliss_persist")
+    set(WEB_EXPORTS "_main,_bliss_new_game,_bliss_launch_ball,_bliss_demo_toggle,_bliss_toggle_pause,_bliss_is_paused,_bliss_pause,_bliss_toggle_sound,_bliss_toggle_music,_bliss_get_options,_bliss_set_option,_bliss_get_high_scores,_bliss_submit_high_score_name,_bliss_get_pending_high_score,_bliss_reemit_pending_high_score,_bliss_cancel_high_score,_bliss_clear_high_scores,_bliss_set_language,_bliss_set_ups,_bliss_reload_music,_bliss_persist,_bliss_set_master_volume,_bliss_get_master_volume")
     # ES6 module factory: import createPinball from './SpaceCadetPinball.js' (Doc/web.md).
     set(WEB_LINK_FLAGS
         "${EMSCRIPTEN_PORT_FLAGS} -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web -lidbfs.js"

@@ -20,6 +20,35 @@ import time
 
 from playwright.sync_api import sync_playwright
 
+# Taps everything connected to an AudioContext destination into an analyser
+# (window.__audioPeak() = peak |sample| since the last call) to measure the game's output.
+AUDIO_TAP_SCRIPT = """
+(() => {
+  const orig = AudioNode.prototype.connect;
+  const taps = new Map();
+  let peak = 0;
+  AudioNode.prototype.connect = function (dest, ...rest) {
+    if (dest instanceof AudioDestinationNode) {
+      const ctx = dest.context;
+      let tap = taps.get(ctx);
+      if (!tap) {
+        tap = ctx.createAnalyser();
+        tap.fftSize = 2048;
+        const buf = new Float32Array(tap.fftSize);
+        setInterval(() => {
+          tap.getFloatTimeDomainData(buf);
+          for (const v of buf) peak = Math.max(peak, Math.abs(v));
+        }, 20);
+        taps.set(ctx, tap);
+      }
+      orig.call(this, tap);
+    }
+    return orig.call(this, dest, ...rest);
+  };
+  window.__audioPeak = () => { const p = peak; peak = 0; return p; };
+})();
+"""
+
 RAF_SCRIPT = """
 window.__raf = [];
 (function loop(t){ window.__raf.push(t); requestAnimationFrame(loop); })(performance.now());
@@ -165,6 +194,7 @@ def main():
             result["version"] = browser.version
             ctx = browser.new_context(viewport={"width": 1000, "height": 900})
             ctx.add_init_script(RAF_SCRIPT)
+            ctx.add_init_script(AUDIO_TAP_SCRIPT)
             page = ctx.new_page()
             page.on("console", lambda m: console.append(f"[{m.type}] {m.text}"))
             page.on("pageerror", lambda e: console.append(f"[pageerror] {e}"))
@@ -248,6 +278,28 @@ def main():
                     run.wait_synced(before)
                 except Exception as e:  # noqa: BLE001
                     run.check("highScoreEntry event", False, str(e))
+
+            # ---- master volume ---------------------------------------------------------------
+            vol = "(v) => pinball._bliss_set_master_volume(v)"
+            run.check("master volume clamps", [run.page.evaluate(vol, v) for v in (150, -5, 100)] == [100, 0, 100])
+            before_opts = run.options()
+            run.ev("() => pinball._bliss_new_game()")  # flippers are silent after game over
+            peaks = {}
+            for level in (100, 0, 100):
+                run.page.evaluate(vol, level)
+                run.page.wait_for_timeout(400)  # let already-mixed SDL buffers drain
+                run.ev("() => window.__audioPeak()")
+                autoplay(run, 4)
+                peaks.setdefault(level, []).append(run.ev("() => window.__audioPeak()"))
+            loud, silent = min(peaks[100]), peaks[0][0]
+            run.check("master volume 0 silences, 100 plays", loud > 0.01 and silent < loud * 0.05,
+                      {"100": peaks[100], "0": silent})
+            run.page.evaluate(vol, 40)
+            after_opts = run.options()
+            run.check("master volume keeps in-game volume options",
+                      [after_opts[k] for k in ("sounds", "music", "soundVolume", "musicVolume")]
+                      == [before_opts[k] for k in ("sounds", "music", "soundVolume", "musicVolume")]
+                      and run.ev("() => pinball._bliss_get_master_volume()") == 40)
 
             # ---- options -------------------------------------------------------------------
             n = len(run.events("optionsChanged"))
